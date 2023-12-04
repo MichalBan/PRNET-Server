@@ -2,17 +2,12 @@ using PRNET_Unity;
 using PRNET_Unity.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
 
 // Add services to the container.
 builder.Services.AddGrpc();
 var app = builder.Build();
-
-//app.UseRouting();
-//app.UseGrpcWeb(new GrpcWebOptions { DefaultEnabled = true });
-//app.UseEndpoints(endpoints =>
-//{
-//    endpoints.MapGrpcService<GreeterService>();
-//});
 
 // Configure the HTTP request pipeline.
 app.MapGrpcService<GreeterService>();

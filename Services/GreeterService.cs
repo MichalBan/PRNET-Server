@@ -44,40 +44,14 @@ namespace PRNET_Unity.Services
             using var connection = new MySqlConnection(_connectionString);
             connection.Open();
 
-            using var selectNickCommand = new MySqlCommand(
-                "SELECT player_id " +
-                "FROM players " +
-                "WHERE nick = @Nick;",
-                connection);
-            selectNickCommand.Parameters.AddWithValue("@Nick", request.Name);
-            var playerId = selectNickCommand.ExecuteScalar();
-
-            if (playerId == null)
-            {
-                using var insertNickCommand = new MySqlCommand(
-                    "INSERT INTO players (nick) " +
-                    "VALUES (@Nick);",
-                    connection);
-                insertNickCommand.Parameters.AddWithValue("@Nick", request.Name);
-                insertNickCommand.ExecuteNonQuery();
-
-                playerId = selectNickCommand.ExecuteScalar();
-            }
-
+            var playerId = GetPlayerId(request.Name, connection);
             if (playerId == null)
             {
                 _logger.LogWarning("Inserting new player failed");
                 return Task.FromResult(new SubmitReply { Success = false });
             }
 
-            using var insertScoreCommand = new MySqlCommand(
-                "INSERT INTO scores (player_id, survived_time, played_date) " +
-                "VALUES (@PlayerId, @SurvivedTime, @PlayedDate);",
-                connection);
-            insertScoreCommand.Parameters.AddWithValue("@PlayerId", (int)playerId);
-            insertScoreCommand.Parameters.AddWithValue("@SurvivedTime", request.SurvivedTime.ToTimeSpan());
-            insertScoreCommand.Parameters.AddWithValue("@PlayedDate", DateTime.Now);
-            insertScoreCommand.ExecuteNonQuery();
+            InsertScore(playerId, request.SurvivedTime, connection);
 
             connection.Close();
             _logger.LogInformation("Submit successful");
@@ -90,16 +64,9 @@ namespace PRNET_Unity.Services
             await using var connection = new MySqlConnection(_connectionString);
             connection.Open();
 
-            await using var selectCommand = new MySqlCommand(
-                "SELECT players.nick, scores.survived_time, scores.played_date " +
-                "FROM scores " +
-                "INNER JOIN players " +
-                "ON scores.player_id = players.player_id " +
-                "ORDER BY scores.survived_time DESC;",
-                connection);
-            await using var reader = await selectCommand.ExecuteReaderAsync();
+            var reader = await SelectAllScores(connection);
+            await StreamScores(responseStream, reader);
 
-            await StreamGetReplies(responseStream, reader);
             await connection.CloseAsync();
             _logger.LogInformation("GetAll successful");
         }
@@ -117,6 +84,74 @@ namespace PRNET_Unity.Services
             await using var connection = new MySqlConnection(_connectionString);
             connection.Open();
 
+            var reader = await SelectPlayerScores(request, connection);
+
+            await StreamScores(responseStream, reader);
+            await connection.CloseAsync();
+            _logger.LogInformation("GetMy successful");
+        }
+
+        private static void InsertScore(object playerId, Duration survivedTime, MySqlConnection connection)
+        {
+            using var command = new MySqlCommand(
+                "INSERT INTO scores (player_id, survived_time, played_date) " +
+                "VALUES (@PlayerId, @SurvivedTime, @PlayedDate);",
+                connection);
+            command.Parameters.AddWithValue("@PlayerId", (int)playerId);
+            command.Parameters.AddWithValue("@SurvivedTime", survivedTime.ToTimeSpan());
+            command.Parameters.AddWithValue("@PlayedDate", DateTime.Now);
+            command.ExecuteNonQuery();
+        }
+
+        private static object? GetPlayerId(string nick, MySqlConnection connection)
+        {
+            var playerId = SelectPlayerId(nick, connection);
+            if (playerId != null)
+            {
+                return playerId;
+            }
+
+            InsertPlayer(nick, connection);
+            playerId = SelectPlayerId(nick, connection);
+
+            return playerId;
+        }
+
+        private static object? SelectPlayerId(string nick, MySqlConnection connection)
+        {
+            using var command = new MySqlCommand(
+                "SELECT player_id " +
+                "FROM players " +
+                "WHERE nick = @Nick;",
+                connection);
+            command.Parameters.AddWithValue("@Nick", nick);
+            return command.ExecuteScalar();
+        }
+
+        private static void InsertPlayer(string nick, MySqlConnection connection)
+        {
+            using var insertNickCommand = new MySqlCommand(
+                "INSERT INTO players (nick) " +
+                "VALUES (@Nick);",
+                connection);
+            insertNickCommand.Parameters.AddWithValue("@Nick", nick);
+            insertNickCommand.ExecuteNonQuery();
+        }
+
+        private static async Task<MySqlDataReader> SelectAllScores(MySqlConnection connection)
+        {
+            await using var selectCommand = new MySqlCommand(
+                "SELECT players.nick, scores.survived_time, scores.played_date " +
+                "FROM scores " +
+                "INNER JOIN players " +
+                "ON scores.player_id = players.player_id " +
+                "ORDER BY scores.survived_time DESC;",
+                connection);
+            return await selectCommand.ExecuteReaderAsync();
+        }
+
+        private static async Task<MySqlDataReader> SelectPlayerScores(GetMyRequest request, MySqlConnection connection)
+        {
             await using var selectCommand = new MySqlCommand(
                 "SELECT players.nick, scores.survived_time, scores.played_date " +
                 "FROM scores " +
@@ -126,14 +161,10 @@ namespace PRNET_Unity.Services
                 "ORDER BY scores.survived_time DESC;",
                 connection);
             selectCommand.Parameters.AddWithValue("@Nick", request.Name);
-            await using var reader = await selectCommand.ExecuteReaderAsync();
-
-            await StreamGetReplies(responseStream, reader);
-            await connection.CloseAsync();
-            _logger.LogInformation("GetMy successful");
+            return await selectCommand.ExecuteReaderAsync();
         }
 
-        private static async Task StreamGetReplies(IServerStreamWriter<GetReply> responseStream, MySqlDataReader reader)
+        private static async Task StreamScores(IAsyncStreamWriter<GetReply> responseStream, MySqlDataReader reader)
         {
             while (reader.Read())
             {

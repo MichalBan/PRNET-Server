@@ -18,16 +18,15 @@ namespace PRNET_Unity.Services
 
         private string ReadConnectionString()
         {
-            try
+            var str = Environment.GetEnvironmentVariable("prnet_connection_string");
+            if(str != null)
             {
-                using var sr = new StreamReader("connection.txt");
-                var fileContent = sr.ReadToEnd();
-                _logger.LogInformation("Reading file successful");
-                return fileContent;
+                _logger.LogInformation("Reading connection string successful");
+                return str;
             }
-            catch (IOException e)
+            else
             {
-                _logger.LogError("The file could not be read: {message}", e.Message);
+                _logger.LogError("The connection string could not be read");
                 return "";
             }
         }
